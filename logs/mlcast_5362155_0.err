@@ -1,0 +1,65 @@
+2026-09-21 16:34:03,581 INFO Processing /store_new/mch/msrad/radar/swiss/data/hdf5/2016/16001/RZC16001.zip
+/users/wolfensb/github_repos/MLCast_mch/create_mlcast_zarr.py:651: UserWarning: no explicit representation of timezones available for np.datetime64
+  t64 = np.datetime64(
+/users/wolfensb/github_repos/MLCast_mch/create_mlcast_zarr.py:709: UserWarning: no explicit representation of timezones available for np.datetime64
+  times64 = np.asarray(
+2026-09-21 16:34:15,569 INFO Writing 576 timesteps: 2016-01-01T00:00:00.000000000 -> 2016-01-01T23:57:00.000000000
+2026-09-21 16:34:17,013 INFO Processing /store_new/mch/msrad/radar/swiss/data/hdf5/2016/16002/RZC16002.zip
+/users/wolfensb/github_repos/MLCast_mch/create_mlcast_zarr.py:651: UserWarning: no explicit representation of timezones available for np.datetime64
+  t64 = np.datetime64(
+/users/wolfensb/github_repos/MLCast_mch/create_mlcast_zarr.py:709: UserWarning: no explicit representation of timezones available for np.datetime64
+  times64 = np.asarray(
+2026-09-21 16:34:32,677 INFO Writing 576 timesteps: 2016-01-02T00:00:00.000000000 -> 2016-01-02T23:57:00.000000000
+2026-09-21 16:34:32,957 WARNING Consolidated metadata not found for /store_new/mch/msrad/radar/MLCast/RZC.zarr; opening unconsolidated
+2026-09-21 16:34:36,309 INFO Processing /store_new/mch/msrad/radar/swiss/data/hdf5/2016/16003/RZC16003.zip
+/users/wolfensb/github_repos/MLCast_mch/create_mlcast_zarr.py:651: UserWarning: no explicit representation of timezones available for np.datetime64
+  t64 = np.datetime64(
+/users/wolfensb/github_repos/MLCast_mch/create_mlcast_zarr.py:709: UserWarning: no explicit representation of timezones available for np.datetime64
+  times64 = np.asarray(
+2026-09-21 16:34:44,165 INFO Writing 576 timesteps: 2016-01-03T00:00:00.000000000 -> 2016-01-03T23:57:00.000000000
+2026-09-21 16:34:46,375 INFO Processing /store_new/mch/msrad/radar/swiss/data/hdf5/2016/16004/RZC16004.zip
+/users/wolfensb/github_repos/MLCast_mch/create_mlcast_zarr.py:651: UserWarning: no explicit representation of timezones available for np.datetime64
+  t64 = np.datetime64(
+/users/wolfensb/github_repos/MLCast_mch/create_mlcast_zarr.py:709: UserWarning: no explicit representation of timezones available for np.datetime64
+  times64 = np.asarray(
+2026-09-21 16:34:54,217 INFO Writing 576 timesteps: 2016-01-04T00:00:00.000000000 -> 2016-01-04T23:57:00.000000000
+2026-09-21 16:34:56,552 INFO Processing /store_new/mch/msrad/radar/swiss/data/hdf5/2016/16005/RZC16005.zip
+/users/wolfensb/github_repos/MLCast_mch/create_mlcast_zarr.py:651: UserWarning: no explicit representation of timezones available for np.datetime64
+  t64 = np.datetime64(
+/users/wolfensb/github_repos/MLCast_mch/create_mlcast_zarr.py:709: UserWarning: no explicit representation of timezones available for np.datetime64
+  times64 = np.asarray(
+2026-09-21 16:35:04,416 INFO Writing 576 timesteps: 2016-01-05T00:00:00.000000000 -> 2016-01-05T23:57:00.000000000
+2026-09-21 16:35:06,624 INFO Processing /store_new/mch/msrad/radar/swiss/data/hdf5/2016/16006/RZC16006.zip
+/users/wolfensb/github_repos/MLCast_mch/create_mlcast_zarr.py:651: UserWarning: no explicit representation of timezones available for np.datetime64
+  t64 = np.datetime64(
+/users/wolfensb/github_repos/MLCast_mch/create_mlcast_zarr.py:709: UserWarning: no explicit representation of timezones available for np.datetime64
+  times64 = np.asarray(
+2026-09-21 16:35:14,446 INFO Writing 576 timesteps: 2016-01-06T00:00:00.000000000 -> 2016-01-06T23:57:00.000000000
+2026-09-21 16:35:16,402 INFO Processing /store_new/mch/msrad/radar/swiss/data/hdf5/2016/16007/RZC16007.zip
+/users/wolfensb/github_repos/MLCast_mch/create_mlcast_zarr.py:651: UserWarning: no explicit representation of timezones available for np.datetime64
+  t64 = np.datetime64(
+/users/wolfensb/github_repos/MLCast_mch/create_mlcast_zarr.py:709: UserWarning: no explicit representation of timezones available for np.datetime64
+  times64 = np.asarray(
+2026-09-21 16:35:23,790 INFO Writing 576 timesteps: 2016-01-07T00:00:00.000000000 -> 2016-01-07T23:57:00.000000000
+2026-09-21 16:35:26,007 INFO Processing /store_new/mch/msrad/radar/swiss/data/hdf5/2016/16008/RZC16008.zip
+/users/wolfensb/github_repos/MLCast_mch/create_mlcast_zarr.py:651: UserWarning: no explicit representation of timezones available for np.datetime64
+  t64 = np.datetime64(
+/users/wolfensb/github_repos/MLCast_mch/create_mlcast_zarr.py:709: UserWarning: no explicit representation of timezones available for np.datetime64
+  times64 = np.asarray(
+2026-09-21 16:35:33,338 INFO Writing 576 timesteps: 2016-01-08T00:00:00.000000000 -> 2016-01-08T23:57:00.000000000
+2026-09-21 16:35:35,442 INFO Processing /store_new/mch/msrad/radar/swiss/data/hdf5/2016/16009/RZC16009.zip
+/users/wolfensb/github_repos/MLCast_mch/create_mlcast_zarr.py:651: UserWarning: no explicit representation of timezones available for np.datetime64
+  t64 = np.datetime64(
+/users/wolfensb/github_repos/MLCast_mch/create_mlcast_zarr.py:709: UserWarning: no explicit representation of timezones available for np.datetime64
+  times64 = np.asarray(
+2026-09-21 16:35:42,897 INFO Writing 576 timesteps: 2016-01-09T00:00:00.000000000 -> 2016-01-09T23:57:00.000000000
+2026-09-21 16:35:45,168 INFO Processing /store_new/mch/msrad/radar/swiss/data/hdf5/2016/16010/RZC16010.zip
+/users/wolfensb/github_repos/MLCast_mch/create_mlcast_zarr.py:651: UserWarning: no explicit representation of timezones available for np.datetime64
+  t64 = np.datetime64(
+/users/wolfensb/github_repos/MLCast_mch/create_mlcast_zarr.py:709: UserWarning: no explicit representation of timezones available for np.datetime64
+  times64 = np.asarray(
+2026-09-21 16:35:45,539 INFO Writing 1 timesteps: 2016-01-10T00:00:00.000000000 -> 2016-01-10T00:00:00.000000000
+2026-09-21 16:35:45,651 WARNING Consolidated metadata not found for /store_new/mch/msrad/radar/MLCast/RZC.zarr; opening unconsolidated
+2026-09-21 16:35:45,676 INFO Dataset starts at 2016-01-01T00:00:00
+2026-09-21 16:35:45,676 INFO Found 2592 missing expected timesteps
+2026-09-21 16:35:45,838 INFO Finished writing /store_new/mch/msrad/radar/MLCast/RZC.zarr

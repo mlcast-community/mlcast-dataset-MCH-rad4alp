@@ -140,7 +140,7 @@ def parse_args():
 
 
 def parse_datetime(value):
-    return datetime.fromisoformat(value)
+    return datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
 
 
 def iter_days(start, end):
@@ -904,7 +904,7 @@ def update_time_metadata(
 def main():
     args = parse_args()
 
-    logger.basicConfig(
+    logging.basicConfig(
         level=getattr(
             logging,
             args.log_level.upper(),
