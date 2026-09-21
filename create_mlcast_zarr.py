@@ -112,7 +112,7 @@ def parse_args():
 
     parser.add_argument(
         "--created-with",
-        default=("https://github.com/mlcast-community/mlcast-dataset-MCH@0.1.0"),
+        default=("https://github.com/MeteoSwiss/mlcast-dataset-MCH@0.1.0"),
     )
 
     parser.add_argument(
