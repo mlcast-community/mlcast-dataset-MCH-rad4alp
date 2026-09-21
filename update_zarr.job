@@ -1,0 +1,39 @@
+#!/bin/bash
+#SBATCH --job-name=mlcast
+#SBATCH --array=0-2
+#SBATCH --time=04:00:00
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=8G
+#SBATCH --output=logs/mlcast_%A_%a.out
+#SBATCH --error=logs/mlcast_%A_%a.err
+
+set -euo pipefail
+
+mkdir -p logs
+
+source /scratch/mch/wolfensb/pyrad_venv/miniforge3/bin/activate
+source /scratch/mch/wolfensb/.mlcast_venv/bin/activate
+
+#################################
+# Modify here
+#################################
+START_TIME="2016-01-01"
+END_TIME="2016-01-10"
+OUTPUT_DIR="/store_new/mch/msrad/radar/MLCast/"
+#################################
+
+PRODUCTS=(rzc cpc5 cpc60)
+OUTPUTS=(RZC.zarr CPC5.zarr CPC60.zarr)
+
+PRODUCT="${PRODUCTS[$SLURM_ARRAY_TASK_ID]}"
+OUTPUT="${OUTPUTS[$SLURM_ARRAY_TASK_ID]}"
+
+echo "Processing product: ${PRODUCT}"
+echo "Period: ${START_TIME} -> ${END_TIME}"
+echo "Output: ${OUTPUT}"
+
+python create_mlcast_zarr.py \
+    --product "${PRODUCT}" \
+    --start "${START_TIME}" \
+    --end "${END_TIME}" \
+    --output "${OUTPUT_DIR}/${OUTPUT}"
