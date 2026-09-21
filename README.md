@@ -491,11 +491,7 @@ ds = xr.open_zarr(
     consolidated=True,
 )
 
-dt = (
-    np.diff(ds.time.values)
-    .astype("timedelta64[s]")
-    .astype(int)
-)
+dt = np.diff(ds.time.values).astype("timedelta64[s]").astype(int)
 
 values, counts = np.unique(
     dt,

@@ -5,7 +5,6 @@ import io
 import logging
 import re
 import zipfile
-
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -14,10 +13,10 @@ import h5py
 import numpy as np
 import xarray as xr
 import zarr
-
 from numcodecs import Zstd
 from pyproj import CRS, Transformer
 
+logger = logging.getLogger("mylogger")
 
 ARCHIVE_ROOT = Path("/store_new/mch/msrad/radar/swiss/data/hdf5")
 
@@ -33,6 +32,7 @@ class ProductConfig:
     units: str
     timestep_seconds: int
     time_resolution: str
+
 
 PRODUCTS = {
     "rzc": ProductConfig(
@@ -112,10 +112,7 @@ def parse_args():
 
     parser.add_argument(
         "--created-with",
-        default=(
-            "https://github.com/mlcast-community/"
-            "mlcast-dataset-MeteoSwiss-radar_precipitation@0.1.0"
-        ),
+        default=("https://github.com/mlcast-community/mlcast-dataset-MCH@0.1.0"),
     )
 
     parser.add_argument(
@@ -161,12 +158,7 @@ def day_to_julian(day):
 def archive_path(root, day, product):
     yyddd = day_to_julian(day)
 
-    return (
-        root
-        / f"{day.year:04d}"
-        / yyddd
-        / f"{product.archive_prefix}{yyddd}.zip"
-    )
+    return root / f"{day.year:04d}" / yyddd / f"{product.archive_prefix}{yyddd}.zip"
 
 
 def timestamp_from_filename(filename):
@@ -190,21 +182,15 @@ def timestamp_from_filename(filename):
     )
 
     if match is None:
-        raise ValueError(
-            f"Could not extract timestamp from {basename}"
-        )
+        raise ValueError(f"Could not extract timestamp from {basename}")
 
     year = 2000 + int(match["year"])
     julian = int(match["julian"])
 
-    timestamp = datetime.strptime(
-        f"{year}-{julian:03d}",
-        "%Y-%j",
-    )
-
-    return timestamp.replace(
+    return datetime.strptime(f"{year}-{julian:03d}", "%Y-%j").replace(
         hour=int(match["hour"]),
         minute=int(match["minute"]),
+        tzinfo=timezone.utc,
     )
 
 
@@ -261,18 +247,12 @@ def read_odim_file(fileobj):
         undetect = None
 
         if what is not None:
-            gain = float(
-                what.attrs.get("gain", 1.0)
-            )
-            offset = float(
-                what.attrs.get("offset", 0.0)
-            )
+            gain = float(what.attrs.get("gain", 1.0))
+            offset = float(what.attrs.get("offset", 0.0))
             nodata = what.attrs.get("nodata")
             undetect = what.attrs.get("undetect")
 
-        data = (
-            raw.astype(np.float32) * gain + offset
-        )
+        data = raw.astype(np.float32) * gain + offset
 
         invalid = np.zeros(
             raw.shape,
@@ -298,7 +278,7 @@ def read_odim_file(fileobj):
 
         try:
             crs = CRS.from_user_input(projdef)
-        except Exception:
+        except Exception:  # noqa: BLE001
             crs = CRS.from_epsg(2056)
 
         xsize = int(
@@ -343,15 +323,9 @@ def read_odim_file(fileobj):
             ll_lat,
         )
 
-        x = (
-            x0
-            + (np.arange(xsize) + 0.5) * xscale
-        )
+        x = x0 + (np.arange(xsize) + 0.5) * xscale
 
-        y = (
-            y0
-            + (np.arange(ysize) + 0.5) * yscale
-        )
+        y = y0 + (np.arange(ysize) + 0.5) * yscale
 
         #
         # Ensure y increases.
@@ -438,10 +412,8 @@ def build_dataset(
                 "x",
                 x,
                 {
-                    "standard_name":
-                        "projection_x_coordinate",
-                    "long_name":
-                        "x coordinate of projection",
+                    "standard_name": "projection_x_coordinate",
+                    "long_name": "x coordinate of projection",
                     "units": "m",
                     "axis": "X",
                 },
@@ -450,10 +422,8 @@ def build_dataset(
                 "y",
                 y,
                 {
-                    "standard_name":
-                        "projection_y_coordinate",
-                    "long_name":
-                        "y coordinate of projection",
+                    "standard_name": "projection_y_coordinate",
+                    "long_name": "y coordinate of projection",
                     "units": "m",
                     "axis": "Y",
                 },
@@ -490,36 +460,17 @@ def build_dataset(
         {
             "Conventions": "CF-1.8",
             "title": product.long_name,
-            "institution": (
-                "Federal Office of Meteorology and "
-                "Climatology MeteoSwiss"
-            ),
-            "source": (
-                "MeteoSwiss operational radar "
-                "precipitation product"
-            ),
+            "institution": ("Federal Office of Meteorology and Climatology MeteoSwiss"),
+            "source": ("MeteoSwiss operational radar precipitation product"),
             "license": license_name,
-
-            "consistent_timestep_start":
-                consistent_timestep_start,
-
-            "mlcast_created_on":
-                datetime.now(timezone.utc)
-                .replace(tzinfo=None)
-                .isoformat(timespec="seconds"),
-
-            "mlcast_created_by":
-                creator,
-
-            "mlcast_created_with":
-                created_with,
-
-            "mlcast_dataset_version":
-                dataset_version,
-
-            "mlcast_dataset_identifier": (
-                "CH-MeteoSwiss-precipitation"
-            ),
+            "consistent_timestep_start": consistent_timestep_start,
+            "mlcast_created_on": datetime.now(timezone.utc)
+            .replace(tzinfo=None)
+            .isoformat(timespec="seconds"),
+            "mlcast_created_by": creator,
+            "mlcast_created_with": created_with,
+            "mlcast_dataset_version": dataset_version,
+            "mlcast_dataset_identifier": ("CH-MeteoSwiss-precipitation"),
         }
     )
 
@@ -533,9 +484,8 @@ def open_existing(path):
             consolidated=True,
         )
     except (ValueError, KeyError):
-        logging.warning(
-            "Consolidated metadata not found for %s; "
-            "opening unconsolidated",
+        logger.warning(
+            "Consolidated metadata not found for %s; opening unconsolidated",
             path,
         )
 
@@ -590,41 +540,23 @@ def check_existing_geometry(
     existing = open_existing(output)
 
     try:
-        if (
-            existing.sizes["x"]
-            != ds.sizes["x"]
-        ):
-            raise ValueError(
-                "Existing Zarr has different "
-                "x dimension"
-            )
+        if existing.sizes["x"] != ds.sizes["x"]:
+            raise ValueError("Existing Zarr has different x dimension")
 
-        if (
-            existing.sizes["y"]
-            != ds.sizes["y"]
-        ):
-            raise ValueError(
-                "Existing Zarr has different "
-                "y dimension"
-            )
+        if existing.sizes["y"] != ds.sizes["y"]:
+            raise ValueError("Existing Zarr has different y dimension")
 
         if not np.allclose(
             existing.x.values,
             ds.x.values,
         ):
-            raise ValueError(
-                "Existing Zarr has different "
-                "x coordinates"
-            )
+            raise ValueError("Existing Zarr has different x coordinates")
 
         if not np.allclose(
             existing.y.values,
             ds.y.values,
         ):
-            raise ValueError(
-                "Existing Zarr has different "
-                "y coordinates"
-            )
+            raise ValueError("Existing Zarr has different y coordinates")
 
     finally:
         existing.close()
@@ -703,34 +635,17 @@ def read_one_day(
     reference_y = None
     reference_crs = None
 
-    regex = re.compile(
-        product.member_regex
-    )
+    regex = re.compile(product.member_regex)
 
     with zipfile.ZipFile(archive) as zf:
-        members = [
-            name
-            for name in zf.namelist()
-            if regex.match(
-                Path(name).name
-            )
-        ]
+        members = [name for name in zf.namelist() if regex.match(Path(name).name)]
 
-        members.sort(
-            key=timestamp_from_filename
-        )
+        members.sort(key=timestamp_from_filename)
 
         for member in members:
-            timestamp = (
-                timestamp_from_filename(
-                    member
-                )
-            )
+            timestamp = timestamp_from_filename(member)
 
-            if (
-                timestamp < start
-                or timestamp > end
-            ):
+            if timestamp < start or timestamp > end:
                 continue
 
             t64 = np.datetime64(
@@ -738,13 +653,10 @@ def read_one_day(
                 "ns",
             )
 
-            if (
-                minimum_time is not None
-                and t64 <= minimum_time
-            ):
+            if minimum_time is not None and t64 <= minimum_time:
                 continue
 
-            logging.debug(
+            logger.debug(
                 "Reading %s [%s]",
                 member,
                 timestamp,
@@ -758,7 +670,7 @@ def read_one_day(
             with h5py.File(
                 io.BytesIO(raw_bytes),
                 "r",
-            ) as h5:
+            ):
                 #
                 # read_odim_file expects something h5py can open,
                 # so duplicate the small decode logic here by
@@ -768,9 +680,7 @@ def read_one_day(
 
             buffer = io.BytesIO(raw_bytes)
 
-            data, x, y, crs = (
-                read_odim_file(buffer)
-            )
+            data, x, y, crs = read_odim_file(buffer)
 
             if reference_x is None:
                 reference_x = x
@@ -782,17 +692,13 @@ def read_one_day(
                     reference_x,
                     x,
                 ):
-                    raise ValueError(
-                        f"x grid changed in {member}"
-                    )
+                    raise ValueError(f"x grid changed in {member}")
 
                 if not np.allclose(
                     reference_y,
                     y,
                 ):
-                    raise ValueError(
-                        f"y grid changed in {member}"
-                    )
+                    raise ValueError(f"y grid changed in {member}")
 
             arrays.append(data)
             times.append(timestamp)
@@ -810,13 +716,8 @@ def read_one_day(
     data = np.stack(arrays)[order]
     times64 = times64[order]
 
-    if (
-        len(np.unique(times64))
-        != len(times64)
-    ):
-        raise ValueError(
-            f"Duplicate timestamps in {archive}"
-        )
+    if len(np.unique(times64)) != len(times64):
+        raise ValueError(f"Duplicate timestamps in {archive}")
 
     return (
         data,
@@ -862,7 +763,8 @@ def compute_missing_times(
         expected,
         times,
     )
-    
+
+
 def update_time_metadata(
     output,
     product,
@@ -885,19 +787,13 @@ def update_time_metadata(
         )
 
         if len(times) == 0:
-            logging.warning(
-                "Dataset contains no timesteps"
-            )
+            logger.warning("Dataset contains no timesteps")
             return
 
         dt = np.diff(times)
 
-        if np.any(
-            dt <= np.timedelta64(0, "ns")
-        ):
-            raise ValueError(
-                "Time coordinate is not strictly increasing"
-            )
+        if np.any(dt <= np.timedelta64(0, "ns")):
+            raise ValueError("Time coordinate is not strictly increasing")
 
         missing = compute_missing_times(
             times,
@@ -912,12 +808,12 @@ def update_time_metadata(
     finally:
         ds.close()
 
-    logging.info(
+    logger.info(
         "Dataset starts at %s",
         first_time,
     )
 
-    logging.info(
+    logger.info(
         "Found %d missing expected timesteps",
         len(missing),
     )
@@ -942,12 +838,8 @@ def update_time_metadata(
     # ---------------------------------------------------------
     #
     if len(missing) == 0:
-
         if "missing_times" in group:
-            logging.info(
-                "Removing existing empty "
-                "'missing_times' array"
-            )
+            logger.info("Removing existing empty 'missing_times' array")
 
             del group["missing_times"]
 
@@ -969,22 +861,15 @@ def update_time_metadata(
             coords={
                 "missing_times": (
                     "missing_times",
-                    missing.astype(
-                        "datetime64[ns]"
-                    ),
+                    missing.astype("datetime64[ns]"),
                 ),
             }
         )
 
-        missing_ds[
-            "missing_times"
-        ].attrs.update(
+        missing_ds["missing_times"].attrs.update(
             {
                 "standard_name": "time",
-                "long_name": (
-                    "Expected regular timesteps "
-                    "missing from the dataset"
-                ),
+                "long_name": ("Expected regular timesteps missing from the dataset"),
             }
         )
 
@@ -1003,69 +888,45 @@ def update_time_metadata(
     )
 
     group.attrs.clear()
-    group.attrs.update(
-        original_attrs
-    )
+    group.attrs.update(original_attrs)
 
     #
     # Add/update MLCast temporal metadata.
     #
-    group.attrs[
-        "consistent_timestep_start"
-    ] = first_time
+    group.attrs["consistent_timestep_start"] = first_time
 
     #
     # Consolidate once.
     #
-    zarr.consolidate_metadata(
-        str(output)
-    )
+    zarr.consolidate_metadata(str(output))
+
 
 def main():
     args = parse_args()
 
-    logging.basicConfig(
+    logger.basicConfig(
         level=getattr(
             logging,
             args.log_level.upper(),
         ),
-        format=(
-            "%(asctime)s "
-            "%(levelname)s "
-            "%(message)s"
-        ),
+        format=("%(asctime)s %(levelname)s %(message)s"),
     )
 
-    product = PRODUCTS[
-        args.product
-    ]
+    product = PRODUCTS[args.product]
 
-    standard_name = (
-        args.standard_name
-        or product.standard_name
-    )
+    standard_name = args.standard_name or product.standard_name
 
-    start = parse_datetime(
-        args.start
-    )
+    start = parse_datetime(args.start)
 
-    end = parse_datetime(
-        args.end
-    )
+    end = parse_datetime(args.end)
 
     if end < start:
-        raise ValueError(
-            "--end must be >= --start"
-        )
+        raise ValueError("--end must be >= --start")
 
-    last_time = (
-        get_existing_last_time(
-            args.output
-        )
-    )
+    last_time = get_existing_last_time(args.output)
 
     if last_time is not None:
-        logging.info(
+        logger.info(
             "Existing dataset ends at %s",
             last_time,
         )
@@ -1073,13 +934,9 @@ def main():
     first_written = False
     geometry_checked = False
 
-    first_time = get_existing_first_time(
-        args.output
-    )
+    first_time = get_existing_first_time(args.output)
 
-    last_time = get_existing_last_time(
-        args.output
-    )
+    last_time = get_existing_last_time(args.output)
 
     for day in iter_days(
         start,
@@ -1092,13 +949,13 @@ def main():
         )
 
         if not archive.exists():
-            logging.warning(
+            logger.warning(
                 "Archive does not exist: %s",
                 archive,
             )
             continue
 
-        logging.info(
+        logger.info(
             "Processing %s",
             archive,
         )
@@ -1112,7 +969,7 @@ def main():
         )
 
         if result is None:
-            logging.info(
+            logger.info(
                 "No new data in %s",
                 archive,
             )
@@ -1151,48 +1008,36 @@ def main():
             standard_name=standard_name,
             creator=args.creator,
             created_with=args.created_with,
-            dataset_version=(
-                args.dataset_version
-            ),
+            dataset_version=(args.dataset_version),
             license_name=args.license,
-            consistent_timestep_start=(
-                consistent_start
-            ),
+            consistent_timestep_start=(consistent_start),
         )
 
-        logging.info(
+        logger.info(
             "Writing %d timesteps: %s -> %s",
             len(times),
             times[0],
             times[-1],
         )
 
-        if (
-                args.output.exists()
-                and not geometry_checked
-            ):
-                check_existing_geometry(
-                    ds,
-                    args.output,
-                )
-                geometry_checked = True
-
+        if args.output.exists() and not geometry_checked:
+            check_existing_geometry(
+                ds,
+                args.output,
+            )
+            geometry_checked = True
 
         write_dataset(
             ds=ds,
             output=args.output,
-            variable_name=(
-                product.variable_name
-            ),
+            variable_name=(product.variable_name),
         )
 
         last_time = times[-1]
         first_written = True
 
     if not args.output.exists():
-        logging.warning(
-            "No output was created"
-        )
+        logger.warning("No output was created")
         return
 
     #
@@ -1205,15 +1050,12 @@ def main():
     )
 
     if first_written:
-        logging.info(
+        logger.info(
             "Finished writing %s",
             args.output,
         )
     else:
-        logging.info(
-            "Nothing new was written; temporal metadata "
-            "was refreshed"
-        )
+        logger.info("Nothing new was written; temporal metadata was refreshed")
 
 
 if __name__ == "__main__":
