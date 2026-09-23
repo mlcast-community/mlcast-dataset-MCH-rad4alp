@@ -6,7 +6,7 @@ The converter currently supports three products:
 
 | Product    | CLI name | Temporal resolution | Output variable        | Output store |
 | ---------- | -------- | ------------------: | ---------------------- | ------------ |
-| RZC        | `rzc`    |             2.5 min | `rain_rate`            | `RZC.zarr`   |
+| RZC        | `rzc`    |               5 min | `rain_rate`            | `RZC.zarr`   |
 | CPC 5 min  | `cpc5`   |               5 min | `precipitation_amount` | `CPC5.zarr`  |
 | CPC 60 min | `cpc60`  |              60 min | `precipitation_amount` | `CPC60.zarr` |
 
