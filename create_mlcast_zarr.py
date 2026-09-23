@@ -548,22 +548,28 @@ def build_dataset(
     return ds
 
 
-def open_existing(path):
-    try:
-        return xr.open_zarr(
-            path,
-            consolidated=True,
-        )
-    except (ValueError, KeyError):
-        logger.warning(
-            "Consolidated metadata not found for %s; opening unconsolidated",
-            path,
-        )
+def open_existing(path, consolidated=True):
+    if consolidated:
+        try:
+            return xr.open_zarr(
+                path,
+                consolidated=True,
+            )
+        except (ValueError, KeyError):
+            logger.warning(
+                "Consolidated metadata not found for %s; opening unconsolidated",
+                path,
+            )
 
+            return xr.open_zarr(
+                path,
+                consolidated=False,
+            )
+    else:
         return xr.open_zarr(
-            path,
-            consolidated=False,
-        )
+                path,
+                consolidated=False,
+            )
 
 
 def get_existing_last_time(path):
@@ -1023,7 +1029,7 @@ def update_time_metadata(
     """
     output = Path(output)
 
-    ds = open_existing(output)
+    ds = open_existing(output, consolidated = False)
 
     try:
         times = np.asarray(
@@ -1082,6 +1088,7 @@ def update_time_metadata(
     # Also delete an old one left by a previous run.
     # ---------------------------------------------------------
     #
+    
     if len(missing) == 0:
         if "missing_times" in group:
             logger.info("Removing existing empty 'missing_times' array")
@@ -1271,7 +1278,7 @@ def main():
                 args.output,
             )
             geometry_checked = True
-
+    
         write_dataset(
             ds=ds,
             output=args.output,
