@@ -20,6 +20,40 @@ logger = logging.getLogger("mylogger")
 
 ARCHIVE_ROOT = Path("/store_new/mch/msrad/radar/swiss/data/hdf5")
 
+RADAR_COUNTS_BY_SUFFIX = {
+    "0": 0,
+    "1": 1,
+    "2": 1,
+    "3": 2,
+    "4": 1,
+    "5": 2,
+    "6": 2,
+    "7": 3,
+    "8": 1,
+    "9": 2,
+    "A": 2,
+    "B": 3,
+    "C": 2,
+    "D": 3,
+    "E": 3,
+    "F": 4,
+    "G": 1,
+    "H": 2,
+    "I": 2,
+    "J": 3,
+    "K": 2,
+    "L": 3,
+    "M": 3,
+    "N": 4,
+    "O": 2,
+    "P": 3,
+    "Q": 3,
+    "R": 4,
+    "S": 3,
+    "T": 4,
+    "U": 4,
+    "V": 5,
+}
 
 @dataclass(frozen=True)
 class ProductConfig:
@@ -39,11 +73,11 @@ PRODUCTS = {
         name="RZC_2.5MIN",
         archive_prefix="RZC",
         member_regex=r"^RZC\d{9}.*\.h5$",
-        variable_name="rain_rate",
-        standard_name="rain_rate",
+        variable_name="prate",
+        standard_name="precipitation_flux",
         long_name="MeteoSwiss radar precipitation rate",
-        units="mm h-1",
-        timestep_seconds=150,
+        units="kg m-2 h-1",
+        timestep_seconds=300,
         time_resolution="PT2M30S",
     ),
     "cpc5": ProductConfig(
@@ -112,7 +146,7 @@ def parse_args():
 
     parser.add_argument(
         "--created-with",
-        default=("https://github.com/MeteoSwiss/mlcast-dataset-MCH@0.1.0"),
+        default=("https://github.com/mlcast-community/mlcast-dataset-MCH@0.1.0"),
     )
 
     parser.add_argument(
@@ -138,6 +172,43 @@ def parse_args():
 
     return parser.parse_args()
 
+
+
+def get_radar_suffix(filename):
+    """
+    Extract radar-combination suffix from an RZC filename.
+
+    Example
+    -------
+    RZC261610705VL.001
+                 ^
+                 V = second-last character before the first dot
+    """
+    name = Path(filename).name
+    prefix = name.split(".", 1)[0]
+
+    if len(prefix) < 2:
+        raise ValueError(
+            f"Cannot extract radar suffix from {filename}"
+        )
+
+    return prefix[-2].upper()
+
+def get_radar_count(filename):
+    """
+    Return the number of radars corresponding to the filename suffix.
+    """
+    suffix = get_radar_suffix(filename)
+
+    if suffix not in RADAR_COUNTS_BY_SUFFIX:
+        logger.warning(
+            "Unknown radar suffix %r in %s",
+            suffix,
+            filename,
+        )
+        return -1
+
+    return RADAR_COUNTS_BY_SUFFIX[suffix]
 
 def parse_datetime(value):
     return datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
@@ -638,13 +709,58 @@ def read_one_day(
     regex = re.compile(product.member_regex)
 
     with zipfile.ZipFile(archive) as zf:
-        members = [name for name in zf.namelist() if regex.match(Path(name).name)]
+        members = [
+            name
+            for name in zf.namelist()
+            if regex.match(Path(name).name)
+        ]
 
-        members.sort(key=timestamp_from_filename)
+        #
+        # ----------------------------------------------------------
+        # Select one best file per timestamp.
+        #
+        # Only retain timestamps on the 5-minute grid:
+        #
+        #   xx:00
+        #   xx:05
+        #   xx:10
+        #   xx:15
+        #   ...
+        #
+        # Therefore the old 2.5-minute timestamps ending in
+        # :02/:07/etc. are discarded.
+        # ----------------------------------------------------------
+        #
+        selected_members = {}
 
         for member in members:
-            timestamp = timestamp_from_filename(member)
+            try:
+                timestamp = timestamp_from_filename(
+                    member
+                )
+            except ValueError as exc:
+                logger.warning(
+                    "Cannot determine timestamp for %s: %s. "
+                    "Skipping.",
+                    member,
+                    exc,
+                )
+                continue
 
+            #
+            # Keep only the 5-minute grid.
+            #
+            if timestamp.minute % 5 != 0:
+                logger.debug(
+                    "Skipping non-5-minute timestamp %s: %s",
+                    timestamp,
+                    member,
+                )
+                continue
+
+            #
+            # Apply requested time interval early.
+            #
             if timestamp < start or timestamp > end:
                 continue
 
@@ -653,35 +769,139 @@ def read_one_day(
                 "ns",
             )
 
-            if minimum_time is not None and t64 <= minimum_time:
+            if (
+                minimum_time is not None
+                and t64 <= minimum_time
+            ):
                 continue
 
-            logger.debug(
-                "Reading %s [%s]",
-                member,
-                timestamp,
+            #
+            # Radar count represented by the suffix.
+            #
+            radar_count = get_radar_count(
+                member
             )
 
-            raw_bytes = zf.read(member)
+            if timestamp not in selected_members:
+                selected_members[timestamp] = (
+                    member,
+                    radar_count,
+                )
+                continue
 
             #
-            # h5py can read an in-memory file image.
+            # Duplicate timestamp:
+            # retain the product made from the largest
+            # number of radars.
             #
-            with h5py.File(
-                io.BytesIO(raw_bytes),
-                "r",
+            old_member, old_count = (
+                selected_members[timestamp]
+            )
+
+            if radar_count > old_count:
+                logger.warning(
+                    "Duplicate timestamp %s: "
+                    "replacing %s (%d radars) with "
+                    "%s (%d radars)",
+                    timestamp,
+                    old_member,
+                    old_count,
+                    member,
+                    radar_count,
+                )
+
+                selected_members[timestamp] = (
+                    member,
+                    radar_count,
+                )
+
+            else:
+                logger.warning(
+                    "Duplicate timestamp %s: "
+                    "keeping %s (%d radars), skipping "
+                    "%s (%d radars)",
+                    timestamp,
+                    old_member,
+                    old_count,
+                    member,
+                    radar_count,
+                )
+
+        #
+        # ----------------------------------------------------------
+        # Now actually read only the selected HDF5 files.
+        # ----------------------------------------------------------
+        #
+        for timestamp in sorted(selected_members):
+            member, radar_count = (
+                selected_members[timestamp]
+            )
+
+            logger.debug(
+                "Reading %s [%s, %d radars]",
+                member,
+                timestamp,
+                radar_count,
+            )
+
+            try:
+                raw_bytes = zf.read(member)
+            except (
+                zipfile.BadZipFile,
+                RuntimeError,
+                OSError,
+            ) as exc:
+                logger.warning(
+                    "Could not extract %s from %s: %s. "
+                    "Skipping.",
+                    member,
+                    archive,
+                    exc,
+                )
+                continue
+
+            #
+            # Check HDF5 signature before handing the data
+            # to h5py.
+            #
+            hdf5_signature = b"\x89HDF\r\n\x1a\n"
+
+            if not raw_bytes.startswith(
+                hdf5_signature
             ):
-                #
-                # read_odim_file expects something h5py can open,
-                # so duplicate the small decode logic here by
-                # passing the BytesIO object instead.
-                #
-                pass
+                logger.warning(
+                    "File %s in %s is not a valid HDF5 "
+                    "file (invalid signature). Skipping.",
+                    member,
+                    archive,
+                )
+                continue
 
-            buffer = io.BytesIO(raw_bytes)
+            buffer = io.BytesIO(
+                raw_bytes
+            )
 
-            data, x, y, crs = read_odim_file(buffer)
+            try:
+                data, x, y, crs = (
+                    read_odim_file(buffer)
+                )
+            except (
+                OSError,
+                KeyError,
+                ValueError,
+                TypeError,
+            ) as exc:
+                logger.warning(
+                    "Skipping unreadable file %s in %s: %s",
+                    member,
+                    archive,
+                    exc,
+                )
+                continue
 
+            #
+            # Check grid consistency.
+            #
             if reference_x is None:
                 reference_x = x
                 reference_y = y
@@ -692,16 +912,25 @@ def read_one_day(
                     reference_x,
                     x,
                 ):
-                    raise ValueError(f"x grid changed in {member}")
+                    raise ValueError(
+                        f"x grid changed in {member}"
+                    )
 
                 if not np.allclose(
                     reference_y,
                     y,
                 ):
-                    raise ValueError(f"y grid changed in {member}")
+                    raise ValueError(
+                        f"y grid changed in {member}"
+                    )
 
-            arrays.append(data)
-            times.append(timestamp)
+            arrays.append(
+                data
+            )
+
+            times.append(
+                timestamp
+            )
 
     if not arrays:
         return None
@@ -711,13 +940,30 @@ def read_one_day(
         dtype="datetime64[ns]",
     )
 
-    order = np.argsort(times64)
+    order = np.argsort(
+        times64
+    )
 
-    data = np.stack(arrays)[order]
-    times64 = times64[order]
+    data = np.stack(
+        arrays
+    )[order]
 
-    if len(np.unique(times64)) != len(times64):
-        raise ValueError(f"Duplicate timestamps in {archive}")
+    times64 = times64[
+        order
+    ]
+
+    #
+    # This should now be impossible, but keep the check
+    # as a safeguard.
+    #
+    if (
+        len(np.unique(times64))
+        != len(times64)
+    ):
+        raise RuntimeError(
+            f"Duplicate timestamps remain after "
+            f"selection in {archive}"
+        )
 
     return (
         data,
@@ -726,7 +972,6 @@ def read_one_day(
         reference_y,
         reference_crs,
     )
-
 
 def compute_missing_times(
     times,
