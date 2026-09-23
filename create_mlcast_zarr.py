@@ -131,7 +131,14 @@ def parse_args():
         type=Path,
         required=True,
     )
-
+    
+    parser.add_argument(
+        "--batch-days",
+        type=int,
+        default=30,
+        help="Number of daily archives to accumulate before writing to Zarr",
+    )
+    
     parser.add_argument(
         "--archive-root",
         type=Path,
@@ -146,7 +153,7 @@ def parse_args():
 
     parser.add_argument(
         "--created-with",
-        default=("https://github.com/mlcast-community/mlcast-dataset-MCH@0.1.0"),
+        default=("https://github.com/mlcast-community/mlcast-dataset-MCH-rad4alp@0.1.0"),
     )
 
     parser.add_argument(
@@ -1152,6 +1159,181 @@ def update_time_metadata(
     #
     zarr.consolidate_metadata(str(output))
 
+def flush_batch(
+    batch_data,
+    batch_times,
+    x,
+    y,
+    crs,
+    product,
+    standard_name,
+    args,
+    first_time,
+    geometry_checked,
+):
+    """
+    Concatenate several daily datasets and append them to the Zarr
+    store in a single write operation.
+
+    Returns
+    -------
+    first_time : np.datetime64
+        First timestamp in the complete Zarr dataset.
+
+    last_time : np.datetime64
+        Last timestamp written by this batch.
+
+    geometry_checked : bool
+        Whether the geometry of an existing Zarr has already been checked.
+    """
+
+    if not batch_data:
+        return first_time, None, geometry_checked
+
+    logger.info(
+        "Combining %d daily blocks",
+        len(batch_data),
+    )
+
+    #
+    # Concatenate all daily blocks along time.
+    #
+    data = np.concatenate(
+        batch_data,
+        axis=0,
+    )
+
+    times = np.concatenate(
+        batch_times,
+    ).astype("datetime64[ns]")
+
+    #
+    # Sort chronologically.
+    #
+    order = np.argsort(times)
+
+    times = times[order]
+    data = data[order]
+
+    #
+    # Defensive duplicate removal.
+    #
+    # Duplicates within a single archive should already have been
+    # resolved by read_one_day(), but this protects against duplicates
+    # appearing between adjacent archives.
+    #
+    unique_times, unique_indices = np.unique(
+        times,
+        return_index=True,
+    )
+
+    if len(unique_times) != len(times):
+        ndups = len(times) - len(unique_times)
+
+        logger.warning(
+            "Found %d duplicate timestamp(s) across batch; "
+            "keeping first occurrence",
+            ndups,
+        )
+
+        keep = np.sort(unique_indices)
+
+        times = times[keep]
+        data = data[keep]
+
+    #
+    # Make sure time is strictly increasing.
+    #
+    if len(times) > 1:
+        dt = np.diff(times)
+
+        if np.any(dt <= np.timedelta64(0, "ns")):
+            raise ValueError(
+                "Batch time coordinate is not strictly increasing"
+            )
+
+    #
+    # Determine first timestamp of the complete dataset.
+    #
+    if first_time is None:
+        first_time = times[0]
+
+    consistent_start = np.datetime_as_string(
+        first_time,
+        unit="s",
+    )
+
+    logger.info(
+        "Writing batch of %d timesteps: %s -> %s",
+        len(times),
+        times[0],
+        times[-1],
+    )
+
+    logger.info(
+        "Batch array size: %.2f GB",
+        data.nbytes / 1024**3,
+    )
+
+    #
+    # Create xarray Dataset.
+    #
+    ds = build_dataset(
+        data=data,
+        times=times,
+        x=x,
+        y=y,
+        crs=crs,
+        product=product,
+        standard_name=standard_name,
+        creator=args.creator,
+        created_with=args.created_with,
+        dataset_version=args.dataset_version,
+        license_name=args.license,
+        consistent_timestep_start=consistent_start,
+    )
+
+    #
+    # If appending to an already-existing Zarr, check the geometry
+    # exactly once.
+    #
+    if (
+        args.output.exists()
+        and not geometry_checked
+    ):
+        check_existing_geometry(
+            ds,
+            args.output,
+        )
+
+        geometry_checked = True
+
+    #
+    # One Zarr write for the entire batch.
+    #
+    write_dataset(
+        ds=ds,
+        output=args.output,
+        variable_name=product.variable_name,
+    )
+
+    last_time = times[-1]
+
+    #
+    # Explicitly release potentially large arrays.
+    #
+    ds.close()
+
+    del ds
+    del data
+    del times
+
+    return (
+        first_time,
+        last_time,
+        geometry_checked,
+    )
+
 
 def main():
     args = parse_args()
@@ -1161,21 +1343,82 @@ def main():
             logging,
             args.log_level.upper(),
         ),
-        format=("%(asctime)s %(levelname)s %(message)s"),
+        format="%(asctime)s %(levelname)s %(message)s",
     )
 
-    product = PRODUCTS[args.product]
+    product = PRODUCTS[
+        args.product
+    ]
 
-    standard_name = args.standard_name or product.standard_name
+    standard_name = (
+        args.standard_name
+        or product.standard_name
+    )
 
-    start = parse_datetime(args.start)
+    start = parse_datetime(
+        args.start
+    )
 
-    end = parse_datetime(args.end)
+    end = parse_datetime(
+        args.end
+    )
 
     if end < start:
-        raise ValueError("--end must be >= --start")
+        raise ValueError(
+            "--end must be >= --start"
+        )
 
-    last_time = get_existing_last_time(args.output)
+    #
+    # ------------------------------------------------------------
+    # Batch size
+    # ------------------------------------------------------------
+    #
+    batch_days = args.batch_days
+
+    if batch_days < 1:
+        raise ValueError(
+            "--batch-days must be >= 1"
+        )
+
+    logger.info(
+        "Product: %s",
+        args.product,
+    )
+
+    logger.info(
+        "Requested period: %s -> %s",
+        start,
+        end,
+    )
+
+    logger.info(
+        "Batch size: %d day(s)",
+        batch_days,
+    )
+
+    logger.info(
+        "Output: %s",
+        args.output,
+    )
+
+    #
+    # ------------------------------------------------------------
+    # Inspect existing output, if present.
+    # ------------------------------------------------------------
+    #
+    first_time = get_existing_first_time(
+        args.output
+    )
+
+    last_time = get_existing_last_time(
+        args.output
+    )
+
+    if first_time is not None:
+        logger.info(
+            "Existing dataset starts at %s",
+            first_time,
+        )
 
     if last_time is not None:
         logger.info(
@@ -1183,13 +1426,35 @@ def main():
             last_time,
         )
 
-    first_written = False
+    #
+    # Existing geometry only needs to be checked once.
+    #
     geometry_checked = False
 
-    first_time = get_existing_first_time(args.output)
+    #
+    # Did this invocation actually write anything?
+    #
+    first_written = False
 
-    last_time = get_existing_last_time(args.output)
+    #
+    # ------------------------------------------------------------
+    # Batch buffers
+    # ------------------------------------------------------------
+    #
+    batch_data = []
+    batch_times = []
 
+    batch_x = None
+    batch_y = None
+    batch_crs = None
+
+    ndays_in_batch = 0
+
+    #
+    # ------------------------------------------------------------
+    # Iterate through daily source archives.
+    # ------------------------------------------------------------
+    #
     for day in iter_days(
         start,
         end,
@@ -1236,66 +1501,163 @@ def main():
         ) = result
 
         #
-        # Existing dataset: use its original start time.
+        # --------------------------------------------------------
+        # Check consistency inside the batch.
+        # --------------------------------------------------------
         #
-        if first_time is not None:
-            consistent_start = np.datetime_as_string(
-                first_time,
-                unit="s",
-            )
-        else:
-            consistent_start = np.datetime_as_string(
-                times[0],
-                unit="s",
-            )
-            first_time = times[0]
+        if batch_x is None:
+            batch_x = x
+            batch_y = y
+            batch_crs = crs
 
-        ds = build_dataset(
-            data=data,
-            times=times,
-            x=x,
-            y=y,
-            crs=crs,
-            product=product,
-            standard_name=standard_name,
-            creator=args.creator,
-            created_with=args.created_with,
-            dataset_version=(args.dataset_version),
-            license_name=args.license,
-            consistent_timestep_start=(consistent_start),
+        else:
+            if not np.allclose(
+                batch_x,
+                x,
+            ):
+                raise ValueError(
+                    f"x grid changed in archive {archive}"
+                )
+
+            if not np.allclose(
+                batch_y,
+                y,
+            ):
+                raise ValueError(
+                    f"y grid changed in archive {archive}"
+                )
+
+            #
+            # Projection changing between source files would also
+            # be suspicious.
+            #
+            if batch_crs != crs:
+                raise ValueError(
+                    f"CRS changed in archive {archive}"
+                )
+
+        #
+        # Add this day's data to the in-memory batch.
+        #
+        batch_data.append(
+            data
         )
+
+        batch_times.append(
+            times
+        )
+
+        ndays_in_batch += 1
 
         logger.info(
-            "Writing %d timesteps: %s -> %s",
-            len(times),
-            times[0],
-            times[-1],
+            "Batch currently contains %d day(s), %d timestep(s)",
+            ndays_in_batch,
+            sum(
+                len(t)
+                for t in batch_times
+            ),
         )
 
-        if args.output.exists() and not geometry_checked:
-            check_existing_geometry(
-                ds,
-                args.output,
+        #
+        # --------------------------------------------------------
+        # Flush a complete batch.
+        # --------------------------------------------------------
+        #
+        if ndays_in_batch >= batch_days:
+            (
+                first_time,
+                written_last_time,
+                geometry_checked,
+            ) = flush_batch(
+                batch_data=batch_data,
+                batch_times=batch_times,
+                x=batch_x,
+                y=batch_y,
+                crs=batch_crs,
+                product=product,
+                standard_name=standard_name,
+                args=args,
+                first_time=first_time,
+                geometry_checked=geometry_checked,
             )
-            geometry_checked = True
-    
-        write_dataset(
-            ds=ds,
-            output=args.output,
-            variable_name=(product.variable_name),
+
+            if written_last_time is not None:
+                last_time = written_last_time
+                first_written = True
+
+            #
+            # Completely reset batch.
+            #
+            batch_data = []
+            batch_times = []
+
+            batch_x = None
+            batch_y = None
+            batch_crs = None
+
+            ndays_in_batch = 0
+
+    #
+    # ------------------------------------------------------------
+    # Flush remaining data.
+    #
+    # Example:
+    #
+    # batch_days = 5
+    # request = 12 days
+    #
+    # writes:
+    #   5 days
+    #   5 days
+    #   2 days here
+    #
+    # ------------------------------------------------------------
+    #
+    if batch_data:
+        (
+            first_time,
+            written_last_time,
+            geometry_checked,
+        ) = flush_batch(
+            batch_data=batch_data,
+            batch_times=batch_times,
+            x=batch_x,
+            y=batch_y,
+            crs=batch_crs,
+            product=product,
+            standard_name=standard_name,
+            args=args,
+            first_time=first_time,
+            geometry_checked=geometry_checked,
         )
 
-        last_time = times[-1]
-        first_written = True
+        if written_last_time is not None:
+            last_time = written_last_time
+            first_written = True
 
+    #
+    # ------------------------------------------------------------
+    # Nothing exists at all.
+    # ------------------------------------------------------------
+    #
     if not args.output.exists():
-        logger.warning("No output was created")
+        logger.warning(
+            "No output was created"
+        )
         return
 
     #
-    # Recompute MLCast temporal metadata across the complete
-    # output after all daily appends.
+    # ------------------------------------------------------------
+    # Update MLCast temporal metadata.
     #
+    # This reads the complete time coordinate only ONCE after all
+    # batches are finished.
+    # ------------------------------------------------------------
+    #
+    logger.info(
+        "Updating MLCast temporal metadata"
+    )
+
     update_time_metadata(
         args.output,
         product,
@@ -1306,9 +1668,12 @@ def main():
             "Finished writing %s",
             args.output,
         )
-    else:
-        logger.info("Nothing new was written; temporal metadata was refreshed")
 
+    else:
+        logger.info(
+            "Nothing new was written; "
+            "temporal metadata was refreshed"
+        )
 
 if __name__ == "__main__":
     main()

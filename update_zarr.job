@@ -3,7 +3,7 @@
 #SBATCH --array=0-2
 #SBATCH --time=04:00:00
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=8G
+#SBATCH --mem=32G
 #SBATCH --output=logs/mlcast_%A_%a.out
 #SBATCH --error=logs/mlcast_%A_%a.err
 
@@ -17,8 +17,8 @@ source /scratch/mch/wolfensb/.mlcast_venv/bin/activate
 #################################
 # Modify here
 #################################
-START_TIME="2016-05-11"
-END_TIME="2019-01-01"
+START_TIME="2016-01-01"
+END_TIME="2017-01-01"
 OUTPUT_DIR="/store_new/mch/msrad/radar/MLCast/"
 PRODUCTS=(rzc cpc5 cpc60)
 OUTPUTS=(RZC.zarr CPC5.zarr CPC60.zarr)
