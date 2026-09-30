@@ -14,12 +14,30 @@ import numpy as np
 import xarray as xr
 import zarr
 from numcodecs import Zstd
-from pyproj import CRS, Transformer
+from pyproj import CRS
 
 logger = logging.getLogger("mylogger")
 
+# Where the hdf5 data is stored
 ARCHIVE_ROOT = Path("/store_new/mch/msrad/radar/swiss/data/hdf5")
 
+# Define CH-grid in CH1903 coordinates
+NBINS_Y = 710
+NBINS_X = 640
+X_QPE = np.linspace(255, 965, NBINS_Y + 1) * 1000.0
+Y_QPE = np.linspace(480, -160, NBINS_X + 1) * 1000.0
+X_QPE_CENTERS = 0.5 * (X_QPE[0:-1] + X_QPE[1:])
+Y_QPE_CENTERS = 0.5 * (Y_QPE[0:-1] + Y_QPE[1:])
+CRS_QPE = CRS.from_user_input(
+    "+proj=somerc +lat_0=46.95240555555556 +lon_0=7.439583333333333 +k_0=1 +x_0=2600000 +y_0=1200000 +ellps=bessel +towgs84=674.374,15.056,405.346,0,0,0,0 +units=m +no_defs"
+)
+TIME_ENCODING = {
+    "units": "seconds since 1970-01-01 00:00:00",
+    "calendar": "proleptic_gregorian",
+    "dtype": "int64",
+}
+
+# Number of radars by RZC suffix
 RADAR_COUNTS_BY_SUFFIX = {
     "0": 0,
     "1": 1,
@@ -54,6 +72,7 @@ RADAR_COUNTS_BY_SUFFIX = {
     "U": 4,
     "V": 5,
 }
+
 
 @dataclass(frozen=True)
 class ProductConfig:
@@ -131,14 +150,14 @@ def parse_args():
         type=Path,
         required=True,
     )
-    
+
     parser.add_argument(
         "--batch-days",
         type=int,
         default=30,
         help="Number of daily archives to accumulate before writing to Zarr",
     )
-    
+
     parser.add_argument(
         "--archive-root",
         type=Path,
@@ -153,7 +172,9 @@ def parse_args():
 
     parser.add_argument(
         "--created-with",
-        default=("https://github.com/mlcast-community/mlcast-dataset-MCH-rad4alp@0.1.0"),
+        default=(
+            "https://github.com/mlcast-community/mlcast-dataset-MCH-rad4alp@0.1.0"
+        ),
     )
 
     parser.add_argument(
@@ -180,6 +201,66 @@ def parse_args():
     return parser.parse_args()
 
 
+def swissCH1903_to_wgs84(chy, chx):
+    """
+    Convert swiss coordinates (CH1903 / LV03) to WGS84 coordinates
+
+    The formulas for the coordinates transformation are taken from:
+    "Formeln und Konstanten für die Berechnung der Schweizerischen
+    schiefachsigen Zylinderprojektion und der Transformation
+    zwischen Koordinatensystemen", chapter 4. "Näherungslösungen
+    CH1903 <=> WGS84"
+    Bundesamt für Landestopografie swisstopo (http://www.swisstopo.admin.ch),
+    Oktober 2008
+
+    Test example
+    ------------
+    wgs84 input:
+        latitude  : 46 deg 2' 38.87''
+        longitude : 8 deg 43' 49.79''
+    Result swiss CH1903:
+        chy = 699 999.76  (700000)
+        chx =  99 999.97  (100000)
+
+    Parameters
+    ----------
+    chy, chx : array-like
+        Geographic coordinates CH1903 in meters. (chy = W-E, chx = S-N)
+        note that the definition of swisstopo is inverted compared to the zarr
+        definition of x and y
+
+    Returns
+    -------
+    lon, lat : array-like
+       Longitude and Latitude in WGS84 coordinates
+
+    """
+
+    # 1. Axiliary values (% Bern)
+    y_aux = (chy - 600000) / 1000000
+    x_aux = (chx - 200000) / 1000000
+    lat = (
+        (16.9023892 + (3.238272 * x_aux))
+        + -(0.270978 * y_aux**2)
+        + -(0.002528 * x_aux**2)
+        + -(0.0447 * y_aux**2 * x_aux)
+        + -(0.0140 * x_aux**3)
+    )
+
+    # Unit 10000" to 1" and convert seconds to degrees (dec)
+    lat = (lat * 100) / 36
+
+    lng = (
+        (2.6779094 + (4.728982 * y_aux))
+        + +(0.791484 * y_aux * x_aux)
+        + +(0.1306 * y_aux * x_aux**2)
+        + -(0.0436 * y_aux**3)
+    )
+    # Unit 10000" to 1" and convert seconds to degrees (dec)
+    lng = (lng * 100) / 36
+
+    return (lng, lat)
+
 
 def get_radar_suffix(filename):
     """
@@ -195,11 +276,10 @@ def get_radar_suffix(filename):
     prefix = name.split(".", 1)[0]
 
     if len(prefix) < 2:
-        raise ValueError(
-            f"Cannot extract radar suffix from {filename}"
-        )
+        raise ValueError(f"Cannot extract radar suffix from {filename}")
 
     return prefix[-2].upper()
+
 
 def get_radar_count(filename):
     """
@@ -216,6 +296,7 @@ def get_radar_count(filename):
         return -1
 
     return RADAR_COUNTS_BY_SUFFIX[suffix]
+
 
 def parse_datetime(value):
     return datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
@@ -345,102 +426,12 @@ def read_odim_file(fileobj):
 
         data[invalid] = np.nan
 
-        where = h5["where"]
-
-        projdef = decode_attr(
-            where.attrs.get(
-                "projdef",
-                "EPSG:2056",
-            )
-        )
-
-        try:
-            crs = CRS.from_user_input(projdef)
-        except Exception:  # noqa: BLE001
-            crs = CRS.from_epsg(2056)
-
-        xsize = int(
-            where.attrs.get(
-                "xsize",
-                raw.shape[1],
-            )
-        )
-
-        ysize = int(
-            where.attrs.get(
-                "ysize",
-                raw.shape[0],
-            )
-        )
-
-        xscale = float(
-            where.attrs.get(
-                "xscale",
-                1000.0,
-            )
-        )
-
-        yscale = float(
-            where.attrs.get(
-                "yscale",
-                1000.0,
-            )
-        )
-
-        ll_lon = float(where.attrs["LL_lon"])
-        ll_lat = float(where.attrs["LL_lat"])
-
-        transformer = Transformer.from_crs(
-            CRS.from_epsg(4326),
-            crs,
-            always_xy=True,
-        )
-
-        x0, y0 = transformer.transform(
-            ll_lon,
-            ll_lat,
-        )
-
-        x = x0 + (np.arange(xsize) + 0.5) * xscale
-
-        y = y0 + (np.arange(ysize) + 0.5) * yscale
-
-        #
-        # Ensure y increases.
-        #
-        if y[0] > y[-1]:
-            y = y[::-1]
-            data = data[::-1]
-
-        return data, x, y, crs
-
-
-def make_latlon(x, y, crs):
-    xx, yy = np.meshgrid(x, y)
-
-    transformer = Transformer.from_crs(
-        crs,
-        CRS.from_epsg(4326),
-        always_xy=True,
-    )
-
-    lon, lat = transformer.transform(
-        xx,
-        yy,
-    )
-
-    return (
-        lat.astype(np.float32),
-        lon.astype(np.float32),
-    )
+        return data
 
 
 def build_dataset(
     data,
     times,
-    x,
-    y,
-    crs,
     product,
     standard_name,
     creator,
@@ -449,18 +440,15 @@ def build_dataset(
     license_name,
     consistent_timestep_start,
 ):
-    lat, lon = make_latlon(
-        x,
-        y,
-        crs,
-    )
-
-    crs_wkt = crs.to_wkt()
-
+    x = X_QPE_CENTERS
+    y = Y_QPE_CENTERS
+    X, Y = np.meshgrid(x, y)
+    lon, lat = swissCH1903_to_wgs84(X, Y)
     times = np.asarray(
         times,
         dtype="datetime64[ns]",
     )
+    crs_wkt = CRS_QPE.to_wkt()
 
     ds = xr.Dataset(
         data_vars={
@@ -473,7 +461,7 @@ def build_dataset(
                 attrs={
                     "spatial_ref": crs_wkt,
                     "crs_wkt": crs_wkt,
-                    **crs.to_cf(),
+                    **CRS_QPE.to_cf(),
                 },
             ),
         },
@@ -534,6 +522,10 @@ def build_dataset(
         }
     )
 
+    ds["time"].encoding.update(
+        TIME_ENCODING
+    )
+
     ds.attrs.update(
         {
             "Conventions": "CF-1.8",
@@ -574,16 +566,16 @@ def open_existing(path, consolidated=True):
             )
     else:
         return xr.open_zarr(
-                path,
-                consolidated=False,
-            )
+            path,
+            consolidated=False,
+        )
 
 
 def get_existing_last_time(path):
     if not path.exists():
         return None
 
-    ds = open_existing(path)
+    ds = open_existing(path, consolidated = False)
 
     try:
         if ds.sizes.get("time", 0) == 0:
@@ -663,6 +655,9 @@ def create_encoding(
         },
         "time": {
             "chunks": (4096,),
+            "units": "seconds since 1970-01-01 00:00:00",
+            "calendar": "proleptic_gregorian",
+            "dtype": "int64",
         },
         "x": {
             "chunks": (nx,),
@@ -684,6 +679,14 @@ def create_encoding(
 def write_dataset(ds, output, variable_name):
     output = Path(output)
 
+    ds["time"].encoding.update(
+        {
+            "units": "seconds since 1970-01-01 00:00:00",
+            "calendar": "proleptic_gregorian",
+            "dtype": "int64",
+        }
+    )
+    
     if output.exists():
         ds.to_zarr(
             output,
@@ -719,15 +722,53 @@ def read_one_day(
     reference_y = None
     reference_crs = None
 
-    regex = re.compile(product.member_regex)
+    regex = re.compile(
+        product.member_regex
+    )
 
-    with zipfile.ZipFile(archive) as zf:
+    try:
+        zf = zipfile.ZipFile(
+            archive
+        )
+
+    except zipfile.BadZipFile as exc:
+        logger.warning(
+            "Corrupt ZIP archive %s: %s. "
+            "Skipping this archive.",
+            archive,
+            exc,
+        )
+        return None
+
+    except OSError as exc:
+        logger.warning(
+            "Could not open ZIP archive %s: %s. "
+            "Skipping this archive.",
+            archive,
+            exc,
+        )
+        return None
+
+    with zf:
+        try:
+            names = zf.namelist()
+
+        except zipfile.BadZipFile as exc:
+            logger.warning(
+                "Could not read ZIP directory from %s: %s. "
+                "Skipping this archive.",
+                archive,
+                exc,
+            )
+            return None
+
         members = [
             name
-            for name in zf.namelist()
-            if regex.match(Path(name).name)
+            for name in names
+            if regex.match(
+                Path(name).name
+            )
         ]
-
         #
         # ----------------------------------------------------------
         # Select one best file per timestamp.
@@ -748,13 +789,10 @@ def read_one_day(
 
         for member in members:
             try:
-                timestamp = timestamp_from_filename(
-                    member
-                )
+                timestamp = timestamp_from_filename(member)
             except ValueError as exc:
                 logger.warning(
-                    "Cannot determine timestamp for %s: %s. "
-                    "Skipping.",
+                    "Cannot determine timestamp for %s: %s. Skipping.",
                     member,
                     exc,
                 )
@@ -782,18 +820,13 @@ def read_one_day(
                 "ns",
             )
 
-            if (
-                minimum_time is not None
-                and t64 <= minimum_time
-            ):
+            if minimum_time is not None and t64 <= minimum_time:
                 continue
 
             #
             # Radar count represented by the suffix.
             #
-            radar_count = get_radar_count(
-                member
-            )
+            radar_count = get_radar_count(member)
 
             if timestamp not in selected_members:
                 selected_members[timestamp] = (
@@ -807,9 +840,7 @@ def read_one_day(
             # retain the product made from the largest
             # number of radars.
             #
-            old_member, old_count = (
-                selected_members[timestamp]
-            )
+            old_member, old_count = selected_members[timestamp]
 
             if radar_count > old_count:
                 logger.warning(
@@ -846,9 +877,7 @@ def read_one_day(
         # ----------------------------------------------------------
         #
         for timestamp in sorted(selected_members):
-            member, radar_count = (
-                selected_members[timestamp]
-            )
+            member, radar_count = selected_members[timestamp]
 
             logger.debug(
                 "Reading %s [%s, %d radars]",
@@ -865,8 +894,7 @@ def read_one_day(
                 OSError,
             ) as exc:
                 logger.warning(
-                    "Could not extract %s from %s: %s. "
-                    "Skipping.",
+                    "Could not extract %s from %s: %s. Skipping.",
                     member,
                     archive,
                     exc,
@@ -879,9 +907,7 @@ def read_one_day(
             #
             hdf5_signature = b"\x89HDF\r\n\x1a\n"
 
-            if not raw_bytes.startswith(
-                hdf5_signature
-            ):
+            if not raw_bytes.startswith(hdf5_signature):
                 logger.warning(
                     "File %s in %s is not a valid HDF5 "
                     "file (invalid signature). Skipping.",
@@ -890,14 +916,10 @@ def read_one_day(
                 )
                 continue
 
-            buffer = io.BytesIO(
-                raw_bytes
-            )
+            buffer = io.BytesIO(raw_bytes)
 
             try:
-                data, x, y, crs = (
-                    read_odim_file(buffer)
-                )
+                data = read_odim_file(buffer)
             except (
                 OSError,
                 KeyError,
@@ -912,38 +934,9 @@ def read_one_day(
                 )
                 continue
 
-            #
-            # Check grid consistency.
-            #
-            if reference_x is None:
-                reference_x = x
-                reference_y = y
-                reference_crs = crs
+            arrays.append(data)
 
-            else:
-                if not np.allclose(
-                    reference_x,
-                    x,
-                ):
-                    raise ValueError(
-                        f"x grid changed in {member}"
-                    )
-
-                if not np.allclose(
-                    reference_y,
-                    y,
-                ):
-                    raise ValueError(
-                        f"y grid changed in {member}"
-                    )
-
-            arrays.append(
-                data
-            )
-
-            times.append(
-                timestamp
-            )
+            times.append(timestamp)
 
     if not arrays:
         return None
@@ -953,38 +946,21 @@ def read_one_day(
         dtype="datetime64[ns]",
     )
 
-    order = np.argsort(
-        times64
-    )
+    order = np.argsort(times64)
 
-    data = np.stack(
-        arrays
-    )[order]
+    data = np.stack(arrays)[order]
 
-    times64 = times64[
-        order
-    ]
+    times64 = times64[order]
 
     #
     # This should now be impossible, but keep the check
     # as a safeguard.
     #
-    if (
-        len(np.unique(times64))
-        != len(times64)
-    ):
-        raise RuntimeError(
-            f"Duplicate timestamps remain after "
-            f"selection in {archive}"
-        )
+    if len(np.unique(times64)) != len(times64):
+        raise RuntimeError(f"Duplicate timestamps remain after selection in {archive}")
 
-    return (
-        data,
-        times64,
-        reference_x,
-        reference_y,
-        reference_crs,
-    )
+    return (data, times64)
+
 
 def compute_missing_times(
     times,
@@ -1036,7 +1012,7 @@ def update_time_metadata(
     """
     output = Path(output)
 
-    ds = open_existing(output, consolidated = False)
+    ds = open_existing(output, consolidated=False)
 
     try:
         times = np.asarray(
@@ -1095,7 +1071,7 @@ def update_time_metadata(
     # Also delete an old one left by a previous run.
     # ---------------------------------------------------------
     #
-    
+
     if len(missing) == 0:
         if "missing_times" in group:
             logger.info("Removing existing empty 'missing_times' array")
@@ -1159,12 +1135,10 @@ def update_time_metadata(
     #
     zarr.consolidate_metadata(str(output))
 
+
 def flush_batch(
     batch_data,
     batch_times,
-    x,
-    y,
-    crs,
     product,
     standard_name,
     args,
@@ -1231,8 +1205,7 @@ def flush_batch(
         ndups = len(times) - len(unique_times)
 
         logger.warning(
-            "Found %d duplicate timestamp(s) across batch; "
-            "keeping first occurrence",
+            "Found %d duplicate timestamp(s) across batch; keeping first occurrence",
             ndups,
         )
 
@@ -1248,9 +1221,7 @@ def flush_batch(
         dt = np.diff(times)
 
         if np.any(dt <= np.timedelta64(0, "ns")):
-            raise ValueError(
-                "Batch time coordinate is not strictly increasing"
-            )
+            raise ValueError("Batch time coordinate is not strictly increasing")
 
     #
     # Determine first timestamp of the complete dataset.
@@ -1281,9 +1252,6 @@ def flush_batch(
     ds = build_dataset(
         data=data,
         times=times,
-        x=x,
-        y=y,
-        crs=crs,
         product=product,
         standard_name=standard_name,
         creator=args.creator,
@@ -1297,10 +1265,7 @@ def flush_batch(
     # If appending to an already-existing Zarr, check the geometry
     # exactly once.
     #
-    if (
-        args.output.exists()
-        and not geometry_checked
-    ):
+    if args.output.exists() and not geometry_checked:
         check_existing_geometry(
             ds,
             args.output,
@@ -1328,6 +1293,21 @@ def flush_batch(
     del data
     del times
 
+    #
+    # ------------------------------------------------------------
+    # Update MLCast temporal metadata.
+    #
+    # This reads the complete time coordinate only ONCE after all
+    # batches are finished.
+    # ------------------------------------------------------------
+    #
+    logger.info("Updating MLCast temporal metadata")
+
+    update_time_metadata(
+        args.output,
+        product,
+    )
+
     return (
         first_time,
         last_time,
@@ -1346,27 +1326,16 @@ def main():
         format="%(asctime)s %(levelname)s %(message)s",
     )
 
-    product = PRODUCTS[
-        args.product
-    ]
+    product = PRODUCTS[args.product]
 
-    standard_name = (
-        args.standard_name
-        or product.standard_name
-    )
+    standard_name = args.standard_name or product.standard_name
 
-    start = parse_datetime(
-        args.start
-    )
+    start = parse_datetime(args.start)
 
-    end = parse_datetime(
-        args.end
-    )
+    end = parse_datetime(args.end)
 
     if end < start:
-        raise ValueError(
-            "--end must be >= --start"
-        )
+        raise ValueError("--end must be >= --start")
 
     #
     # ------------------------------------------------------------
@@ -1376,9 +1345,7 @@ def main():
     batch_days = args.batch_days
 
     if batch_days < 1:
-        raise ValueError(
-            "--batch-days must be >= 1"
-        )
+        raise ValueError("--batch-days must be >= 1")
 
     logger.info(
         "Product: %s",
@@ -1406,13 +1373,9 @@ def main():
     # Inspect existing output, if present.
     # ------------------------------------------------------------
     #
-    first_time = get_existing_first_time(
-        args.output
-    )
+    first_time = get_existing_first_time(args.output)
 
-    last_time = get_existing_last_time(
-        args.output
-    )
+    last_time = get_existing_last_time(args.output)
 
     if first_time is not None:
         logger.info(
@@ -1443,10 +1406,6 @@ def main():
     #
     batch_data = []
     batch_times = []
-
-    batch_x = None
-    batch_y = None
-    batch_crs = None
 
     ndays_in_batch = 0
 
@@ -1492,70 +1451,21 @@ def main():
             )
             continue
 
-        (
-            data,
-            times,
-            x,
-            y,
-            crs,
-        ) = result
-
-        #
-        # --------------------------------------------------------
-        # Check consistency inside the batch.
-        # --------------------------------------------------------
-        #
-        if batch_x is None:
-            batch_x = x
-            batch_y = y
-            batch_crs = crs
-
-        else:
-            if not np.allclose(
-                batch_x,
-                x,
-            ):
-                raise ValueError(
-                    f"x grid changed in archive {archive}"
-                )
-
-            if not np.allclose(
-                batch_y,
-                y,
-            ):
-                raise ValueError(
-                    f"y grid changed in archive {archive}"
-                )
-
-            #
-            # Projection changing between source files would also
-            # be suspicious.
-            #
-            if batch_crs != crs:
-                raise ValueError(
-                    f"CRS changed in archive {archive}"
-                )
+        (data, times) = result
 
         #
         # Add this day's data to the in-memory batch.
         #
-        batch_data.append(
-            data
-        )
+        batch_data.append(data)
 
-        batch_times.append(
-            times
-        )
+        batch_times.append(times)
 
         ndays_in_batch += 1
 
         logger.info(
             "Batch currently contains %d day(s), %d timestep(s)",
             ndays_in_batch,
-            sum(
-                len(t)
-                for t in batch_times
-            ),
+            sum(len(t) for t in batch_times),
         )
 
         #
@@ -1571,9 +1481,6 @@ def main():
             ) = flush_batch(
                 batch_data=batch_data,
                 batch_times=batch_times,
-                x=batch_x,
-                y=batch_y,
-                crs=batch_crs,
                 product=product,
                 standard_name=standard_name,
                 args=args,
@@ -1590,10 +1497,6 @@ def main():
             #
             batch_data = []
             batch_times = []
-
-            batch_x = None
-            batch_y = None
-            batch_crs = None
 
             ndays_in_batch = 0
 
@@ -1621,9 +1524,6 @@ def main():
         ) = flush_batch(
             batch_data=batch_data,
             batch_times=batch_times,
-            x=batch_x,
-            y=batch_y,
-            crs=batch_crs,
             product=product,
             standard_name=standard_name,
             args=args,
@@ -1641,27 +1541,8 @@ def main():
     # ------------------------------------------------------------
     #
     if not args.output.exists():
-        logger.warning(
-            "No output was created"
-        )
+        logger.warning("No output was created")
         return
-
-    #
-    # ------------------------------------------------------------
-    # Update MLCast temporal metadata.
-    #
-    # This reads the complete time coordinate only ONCE after all
-    # batches are finished.
-    # ------------------------------------------------------------
-    #
-    logger.info(
-        "Updating MLCast temporal metadata"
-    )
-
-    update_time_metadata(
-        args.output,
-        product,
-    )
 
     if first_written:
         logger.info(
@@ -1670,10 +1551,8 @@ def main():
         )
 
     else:
-        logger.info(
-            "Nothing new was written; "
-            "temporal metadata was refreshed"
-        )
+        logger.info("Nothing new was written; temporal metadata was refreshed")
+
 
 if __name__ == "__main__":
     main()
