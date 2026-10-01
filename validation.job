@@ -1,0 +1,17 @@
+#!/bin/bash
+#SBATCH --job-name=mlcast
+#SBATCH --time=24:00:00
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=32G
+
+
+set -euo pipefail
+
+source /scratch/mch/wolfensb/pyrad_venv/miniforge3/bin/activate
+source /scratch/mch/wolfensb/.mlcast_venv/bin/activate
+
+
+python validate_fields_zarr.py \
+    --input-dir /store_new/mch/msrad/radar/MLCast \
+    --output-dir validation \
+    --n 10
