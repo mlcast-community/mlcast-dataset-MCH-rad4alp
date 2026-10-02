@@ -14,29 +14,46 @@ import numpy as np
 import xarray as xr
 import zarr
 from numcodecs import Zstd
-from pyproj import CRS
+from pyproj import CRS, Transformer
 
 logger = logging.getLogger("mylogger")
 
+def make_latlon(x, y, crs):
+    xx, yy = np.meshgrid(x, y)
+
+    transformer = Transformer.from_crs(
+        crs,
+        CRS.from_epsg(4326),
+        always_xy=True,
+    )
+
+    lon, lat = transformer.transform(
+        xx,
+        yy,
+    )
+
+    return lat.astype(np.float64), lon.astype(np.float64)
+    
+    
 # Where the hdf5 data is stored
 ARCHIVE_ROOT = Path("/store_new/mch/msrad/radar/swiss/data/hdf5")
 
 # Define CH-grid in CH1903 coordinates
 NBINS_Y = 710
 NBINS_X = 640
-X_QPE = np.linspace(255, 965, NBINS_Y + 1) * 1000.0
-Y_QPE = np.linspace(480, -160, NBINS_X + 1) * 1000.0
+Y_QPE = 1E6 + np.linspace(480, -160, NBINS_X + 1) * 1000.0
+X_QPE = 2E6 + np.linspace(255, 965, NBINS_Y + 1) * 1000.0
 X_QPE_CENTERS = 0.5 * (X_QPE[0:-1] + X_QPE[1:])
 Y_QPE_CENTERS = 0.5 * (Y_QPE[0:-1] + Y_QPE[1:])
-CRS_QPE = CRS.from_user_input(
-    "+proj=somerc +lat_0=46.95240555555556 +lon_0=7.439583333333333 +k_0=1 +x_0=2600000 +y_0=1200000 +ellps=bessel +towgs84=674.374,15.056,405.346,0,0,0,0 +units=m +no_defs"
-)
+CRS_QPE = CRS.from_epsg(2056)
+LAT_QPE, LON_QPE = make_latlon(X_QPE_CENTERS, Y_QPE_CENTERS, CRS_QPE)
+
 TIME_ENCODING = {
     "units": "seconds since 1970-01-01 00:00:00",
     "calendar": "proleptic_gregorian",
     "dtype": "int64",
 }
-
+CRS_QPE_WKT = CRS_QPE.to_wkt()
 # Number of radars by RZC suffix
 RADAR_COUNTS_BY_SUFFIX = {
     "0": 0,
@@ -199,67 +216,6 @@ def parse_args():
     )
 
     return parser.parse_args()
-
-
-def swissCH1903_to_wgs84(chy, chx):
-    """
-    Convert swiss coordinates (CH1903 / LV03) to WGS84 coordinates
-
-    The formulas for the coordinates transformation are taken from:
-    "Formeln und Konstanten für die Berechnung der Schweizerischen
-    schiefachsigen Zylinderprojektion und der Transformation
-    zwischen Koordinatensystemen", chapter 4. "Näherungslösungen
-    CH1903 <=> WGS84"
-    Bundesamt für Landestopografie swisstopo (http://www.swisstopo.admin.ch),
-    Oktober 2008
-
-    Test example
-    ------------
-    wgs84 input:
-        latitude  : 46 deg 2' 38.87''
-        longitude : 8 deg 43' 49.79''
-    Result swiss CH1903:
-        chy = 699 999.76  (700000)
-        chx =  99 999.97  (100000)
-
-    Parameters
-    ----------
-    chy, chx : array-like
-        Geographic coordinates CH1903 in meters. (chy = W-E, chx = S-N)
-        note that the definition of swisstopo is inverted compared to the zarr
-        definition of x and y
-
-    Returns
-    -------
-    lon, lat : array-like
-       Longitude and Latitude in WGS84 coordinates
-
-    """
-
-    # 1. Axiliary values (% Bern)
-    y_aux = (chy - 600000) / 1000000
-    x_aux = (chx - 200000) / 1000000
-    lat = (
-        (16.9023892 + (3.238272 * x_aux))
-        + -(0.270978 * y_aux**2)
-        + -(0.002528 * x_aux**2)
-        + -(0.0447 * y_aux**2 * x_aux)
-        + -(0.0140 * x_aux**3)
-    )
-
-    # Unit 10000" to 1" and convert seconds to degrees (dec)
-    lat = (lat * 100) / 36
-
-    lng = (
-        (2.6779094 + (4.728982 * y_aux))
-        + +(0.791484 * y_aux * x_aux)
-        + +(0.1306 * y_aux * x_aux**2)
-        + -(0.0436 * y_aux**3)
-    )
-    # Unit 10000" to 1" and convert seconds to degrees (dec)
-    lng = (lng * 100) / 36
-
-    return (lng, lat)
 
 
 def get_radar_suffix(filename):
@@ -440,15 +396,7 @@ def build_dataset(
     license_name,
     consistent_timestep_start,
 ):
-    x = X_QPE_CENTERS
-    y = Y_QPE_CENTERS
-    X, Y = np.meshgrid(x, y)
-    lon, lat = swissCH1903_to_wgs84(X, Y)
-    times = np.asarray(
-        times,
-        dtype="datetime64[ns]",
-    )
-    crs_wkt = CRS_QPE.to_wkt()
+
 
     ds = xr.Dataset(
         data_vars={
@@ -459,8 +407,8 @@ def build_dataset(
             "crs": xr.DataArray(
                 np.int32(0),
                 attrs={
-                    "spatial_ref": crs_wkt,
-                    "crs_wkt": crs_wkt,
+                    "spatial_ref": CRS_QPE_WKT,
+                    "crs_wkt": CRS_QPE_WKT,
                     **CRS_QPE.to_cf(),
                 },
             ),
@@ -476,7 +424,7 @@ def build_dataset(
             ),
             "x": (
                 "x",
-                x,
+                X_QPE_CENTERS, # Convert to LV95
                 {
                     "standard_name": "projection_x_coordinate",
                     "long_name": "x coordinate of projection",
@@ -486,7 +434,7 @@ def build_dataset(
             ),
             "y": (
                 "y",
-                y,
+                Y_QPE_CENTERS, # Convert to LV95,
                 {
                     "standard_name": "projection_y_coordinate",
                     "long_name": "y coordinate of projection",
@@ -496,7 +444,7 @@ def build_dataset(
             ),
             "lat": (
                 ("y", "x"),
-                lat,
+                LAT_QPE,
                 {
                     "standard_name": "latitude",
                     "units": "degrees_north",
@@ -504,7 +452,7 @@ def build_dataset(
             ),
             "lon": (
                 ("y", "x"),
-                lon,
+                LON_QPE,
                 {
                     "standard_name": "longitude",
                     "units": "degrees_east",
@@ -717,10 +665,6 @@ def read_one_day(
 ):
     arrays = []
     times = []
-
-    reference_x = None
-    reference_y = None
-    reference_crs = None
 
     regex = re.compile(
         product.member_regex

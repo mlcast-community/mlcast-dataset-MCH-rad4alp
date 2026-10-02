@@ -17,9 +17,9 @@ source /scratch/mch/wolfensb/.mlcast_venv/bin/activate
 #################################
 # Modify here
 #################################
-START_TIME="2022-01-01"
-END_TIME="2026-09-01"
-OUTPUT_DIR="/store_new/mch/msrad/radar/MLCast/"
+START_TIME="2020-01-01"
+END_TIME="2020-01-10"
+OUTPUT_DIR="/store_new/mch/msrad/radar/MLCast_test/"
 PRODUCTS=(rzc cpc5 cpc60)
 OUTPUTS=(RZC.zarr CPC5.zarr CPC60.zarr)
 #################################
